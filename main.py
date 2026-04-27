@@ -128,6 +128,7 @@ ARCANE_BLUE = (0.42, 0.82, 1.0)
 SERPENT_MAGIC = (0.26, 0.95, 0.42)
 PHOENIX_MAGIC = (1.0, 0.38, 0.13)
 PHOENIX_GOLD = (1.0, 0.76, 0.24)
+SERPENT_SILVER = (0.78, 0.88, 0.86)
 STAFF_DARK = (0.075, 0.055, 0.09)
 ORB_VALUE_COLORS = {
     2: (0.68, 0.42, 1.0),
@@ -135,6 +136,15 @@ ORB_VALUE_COLORS = {
     6: (1.0, 0.72, 0.22),
 }
 CARDINAL_STEPS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+MOVE_ANIM_MS = 240
+COLLECTION_EFFECT_MS = 950
+FADE_DURATION_MS = 320.0
+
+SCREEN_TITLE = "title"
+SCREEN_INSTRUCTIONS = "instructions"
+SCREEN_RUNNING = "running"
+SCREEN_PAUSE = "pause"
+SCREEN_GAME_OVER = "game_over"
 
 
 def cell_center(gx: int, gy: int) -> tuple[float, float, float]:
@@ -166,6 +176,29 @@ def hash01(x: int, y: int, salt: int = 0) -> float:
 
 def pulse01(t: float, speed: float, phase: float = 0.0) -> float:
     return 0.5 + 0.5 * math.sin(t * speed + phase)
+
+
+def ease_out_cubic(value: float) -> float:
+    value = clamp01(value)
+    return 1.0 - (1.0 - value) ** 3
+
+
+def animated_grid_pos(
+    current_pos: tuple[int, int],
+    anim: tuple[tuple[int, int], tuple[int, int], int] | None,
+    now_ms: int,
+) -> tuple[float, float]:
+    if anim is None:
+        return float(current_pos[0]), float(current_pos[1])
+
+    start, end, started_ms = anim
+    progress = ease_out_cubic((now_ms - started_ms) / MOVE_ANIM_MS)
+    if progress >= 1.0:
+        return float(current_pos[0]), float(current_pos[1])
+    return (
+        start[0] + (end[0] - start[0]) * progress,
+        start[1] + (end[1] - start[1]) * progress,
+    )
 
 
 def draw_floor_quad(
@@ -506,17 +539,21 @@ def draw_danger_zone(
 
 
 def draw_mage_magical(
-    gx: int,
-    gy: int,
+    gx: float,
+    gy: float,
     rgb: tuple[float, float, float],
     quad,
     t: float,
     phase: float,
     archetype: str,
+    mp: int,
+    max_mp: int,
 ) -> None:
     cx, _, cz = cell_center(gx, gy)
 
     pulse = 0.5 + 0.5 * math.sin(t * 3.4 + phase)
+    mp_power = clamp01(mp / max(1, max_mp))
+    mp_boost = 0.55 + 0.75 * mp_power
 
     if archetype == "serpent":
         body_rgb = (
@@ -530,10 +567,10 @@ def draw_mage_magical(
             min(1.0, body_rgb[2] + 0.14),
         )
         sigil_alpha_main, sigil_alpha_sub = 0.3, 0.22
-        aura = 0.17 + 0.07 * pulse
-        wisp_count = 3
-        wisp_radius = 0.22
-        wisp_alpha = 0.78
+        aura = (0.17 + 0.07 * pulse) * mp_boost
+        wisp_count = 3 + int(mp_power * 4)
+        wisp_radius = 0.22 + 0.12 * mp_power
+        wisp_alpha = 0.56 + 0.34 * mp_power
         y_bob_scale = 0.8
     else:
         body_rgb = (
@@ -547,19 +584,24 @@ def draw_mage_magical(
             min(1.0, body_rgb[2] + 0.08),
         )
         sigil_alpha_main, sigil_alpha_sub = 0.36, 0.26
-        aura = 0.21 + 0.1 * pulse
-        wisp_count = 5
-        wisp_radius = 0.3
-        wisp_alpha = 0.88
+        aura = (0.21 + 0.1 * pulse) * mp_boost
+        wisp_count = 5 + int(mp_power * 5)
+        wisp_radius = 0.3 + 0.16 * mp_power
+        wisp_alpha = 0.6 + 0.35 * mp_power
         y_bob_scale = 1.0
-            # Phoenix fire particles
+
+    mp_ring_alpha = 0.16 + 0.28 * mp_power
+    mp_ring_radius = 0.42 + 0.28 * mp_power + 0.03 * pulse
+
+    # Phoenix fire particles
     if archetype == "phoenix":
-        for i in range(12):
-            ang = t * 2.8 + phase + i * math.tau / 12
-            radius = 0.18 + 0.12 * math.sin(t * 3.0 + i)
+        fire_count = 10 + int(mp_power * 10)
+        for i in range(fire_count):
+            ang = t * 2.8 + phase + i * math.tau / max(1, fire_count)
+            radius = 0.18 + 0.22 * mp_power + 0.12 * math.sin(t * 3.0 + i)
             px = cx + math.cos(ang) * radius
             pz = cz + math.sin(ang) * radius
-            py = 0.35 + 0.55 * ((t * 0.8 + i * 0.13) % 1.0)
+            py = 0.35 + (0.45 + 0.22 * mp_power) * ((t * 0.8 + i * 0.13) % 1.0)
 
             size = 0.025 + 0.025 * pulse01(t, 4.0, i)
             fire_color = (
@@ -579,13 +621,15 @@ def draw_mage_magical(
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glDisable(GL_LIGHTING)
+    draw_arcane_disc(cx, cz, mp_ring_radius, rgb, mp_ring_alpha * 0.35, y=0.012, segments=34)
+    draw_arcane_disc(cx, cz, mp_ring_radius * 0.68, core_rgb, mp_ring_alpha * 0.22, y=0.014, segments=28)
     ang1 = t * 1.15 + phase
     ang2 = -t * 0.87 + phase * 0.6
     for ang, alpha, scale in ((ang1, sigil_alpha_main, 1.0), (ang2, sigil_alpha_sub, 0.78)):
         c = math.cos(ang)
         s = math.sin(ang)
-        r = 0.36 * scale
-        glColor4f(rgb[0], rgb[1], rgb[2], alpha)
+        r = (0.36 + 0.14 * mp_power) * scale
+        glColor4f(rgb[0], rgb[1], rgb[2], alpha + 0.12 * mp_power)
         glBegin(GL_QUADS)
         glVertex3f(cx + (-r) * c - (-0.03) * s, 0.011, cz + (-r) * s + (-0.03) * c)
         glVertex3f(cx + (r) * c - (-0.03) * s, 0.011, cz + (r) * s + (-0.03) * c)
@@ -631,10 +675,12 @@ def draw_mage_magical(
                 min(1.0, body_rgb[1] * (1.0 - 0.18 * blend) + 0.12 * blend),
                 min(1.0, body_rgb[2] * (1.0 - 0.2 * blend) + 0.04 * blend),
             )
+            if i % 2 == 0:
+                seg_rgb = mix_rgb(seg_rgb, SERPENT_SILVER, 0.16 + 0.12 * mp_power)
             glPushMatrix()
             glColor3f(seg_rgb[0], seg_rgb[1], seg_rgb[2])
             glTranslatef(sx, sy, sz)
-            gluSphere(quad, 0.12 - 0.01 * i, 14, 14)
+            gluSphere(quad, (0.12 - 0.01 * i) * (0.92 + 0.18 * mp_power), 14, 14)
             glPopMatrix()
 
         # Serpent head with bright eyes.
@@ -705,7 +751,7 @@ def draw_mage_magical(
     glPushMatrix()
     glColor3f(core_rgb[0], core_rgb[1], core_rgb[2])
     glTranslatef(staff_x, 0.78 + 0.025 * math.sin(t * 3.0 + phase), staff_z)
-    gluSphere(quad, 0.055, 12, 12)
+    gluSphere(quad, 0.045 + 0.045 * mp_power, 12, 12)
     glPopMatrix()
 
     # Orbiting wisps.
@@ -773,6 +819,47 @@ def build_orb_value_textures(font: pygame.font.Font) -> dict[int, tuple[int, int
     return out
 
 
+def draw_text_billboard(
+    tid: int,
+    tw: int,
+    th: int,
+    *,
+    cx: float,
+    cy: float,
+    cz: float,
+    cam_yaw: float,
+    cam_pitch: float,
+    half_h: float,
+    alpha: float = 1.0,
+) -> None:
+    glPushMatrix()
+    glTranslatef(cx, cy, cz)
+    glRotatef(-math.degrees(cam_yaw), 0.0, 1.0, 0.0)
+    glRotatef(-math.degrees(cam_pitch), 1.0, 0.0, 0.0)
+    glDisable(GL_LIGHTING)
+    glEnable(GL_TEXTURE_2D)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glColor4f(1.0, 1.0, 1.0, alpha)
+    glBindTexture(GL_TEXTURE_2D, tid)
+    half_w = half_h * (tw / max(th, 1))
+    glNormal3f(0.0, 0.0, 1.0)
+    glBegin(GL_QUADS)
+    glTexCoord2f(0.0, 0.0)
+    glVertex3f(-half_w, -half_h, 0.0)
+    glTexCoord2f(1.0, 0.0)
+    glVertex3f(half_w, -half_h, 0.0)
+    glTexCoord2f(1.0, 1.0)
+    glVertex3f(half_w, half_h, 0.0)
+    glTexCoord2f(0.0, 1.0)
+    glVertex3f(-half_w, half_h, 0.0)
+    glEnd()
+    glDisable(GL_TEXTURE_2D)
+    glDisable(GL_BLEND)
+    glEnable(GL_LIGHTING)
+    glPopMatrix()
+
+
 def draw_artifact_orb(
     orb,
     quad,
@@ -791,9 +878,10 @@ def draw_artifact_orb(
     glDisable(GL_LIGHTING)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    draw_arcane_disc(cx, cz, 0.43 + 0.04 * pulse, color, 0.11 + 0.07 * pulse, y=0.025, segments=34)
+    draw_arcane_disc(cx, cz, 0.47 + 0.08 * pulse, color, 0.13 + 0.09 * pulse, y=0.025, segments=34)
     draw_rotated_floor_bar(cx, cz, 0.031, ring_angle, 0.76, 0.025, color, 0.22 + 0.13 * pulse)
     draw_rotated_floor_bar(cx, cz, 0.032, -ring_angle * 0.8, 0.52, 0.018, PHOENIX_GOLD, 0.14 + 0.08 * pulse)
+    draw_rotated_floor_bar(cx, cz, 0.033, ring_angle * 0.55 + math.pi * 0.25, 0.62, 0.016, (0.95, 1.0, 1.0), 0.1 + 0.08 * pulse)
 
     glPushMatrix()
     glColor4f(color[0], color[1], color[2], 0.14 + 0.08 * pulse)
@@ -801,8 +889,8 @@ def draw_artifact_orb(
     gluSphere(quad, 0.34 + 0.04 * pulse, 18, 18)
     glPopMatrix()
 
-    for i in range(5):
-        ang = ring_angle * (1.2 + i * 0.1) + i * math.tau / 5
+    for i in range(8):
+        ang = ring_angle * (1.2 + i * 0.1) + i * math.tau / 8
         radius = 0.32 + 0.05 * math.sin(time_seconds * 1.8 + i)
         spark_color = color if i % 2 else PHOENIX_GOLD
         glPushMatrix()
@@ -824,33 +912,17 @@ def draw_artifact_orb(
         return
 
     tid, tw, th = orb_labels[orb.value]
-    glPushMatrix()
-    glTranslatef(cx, 0.92 + bob, cz)
-    glRotatef(-math.degrees(cam_yaw), 0.0, 1.0, 0.0)
-    glRotatef(-math.degrees(cam_pitch), 1.0, 0.0, 0.0)
-    glDisable(GL_LIGHTING)
-    glEnable(GL_TEXTURE_2D)
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glColor3f(1.0, 1.0, 1.0)
-    glBindTexture(GL_TEXTURE_2D, tid)
-    half_h = 0.21
-    half_w = half_h * (tw / max(th, 1))
-    glNormal3f(0.0, 0.0, 1.0)
-    glBegin(GL_QUADS)
-    glTexCoord2f(0.0, 0.0)
-    glVertex3f(-half_w, -half_h, 0.0)
-    glTexCoord2f(1.0, 0.0)
-    glVertex3f(half_w, -half_h, 0.0)
-    glTexCoord2f(1.0, 1.0)
-    glVertex3f(half_w, half_h, 0.0)
-    glTexCoord2f(0.0, 1.0)
-    glVertex3f(-half_w, half_h, 0.0)
-    glEnd()
-    glDisable(GL_TEXTURE_2D)
-    glDisable(GL_BLEND)
-    glEnable(GL_LIGHTING)
-    glPopMatrix()
+    draw_text_billboard(
+        tid,
+        tw,
+        th,
+        cx=cx,
+        cy=0.92 + bob,
+        cz=cz,
+        cam_yaw=cam_yaw,
+        cam_pitch=cam_pitch,
+        half_h=0.21,
+    )
 
 
 def draw_magic_particles(t: float, quad) -> None:
@@ -877,6 +949,66 @@ def draw_magic_particles(t: float, quad) -> None:
     glDisable(GL_BLEND)
 
 
+def draw_collection_effects(
+    collection_effects: list[tuple[tuple[int, int], int, int, tuple[float, float, float]]],
+    quad,
+    *,
+    cam_yaw: float,
+    cam_pitch: float,
+    time_seconds: float,
+    now_ms: int,
+    orb_labels: dict[int, tuple[int, int, int]],
+) -> None:
+    glDisable(GL_LIGHTING)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    for pos, value, started_ms, color in collection_effects:
+        age = now_ms - started_ms
+        progress = clamp01(age / COLLECTION_EFFECT_MS)
+        fade = 1.0 - progress
+        cx, _, cz = cell_center(*pos)
+        burst_radius = 0.18 + progress * 0.72
+        lift = progress * 0.68
+        draw_arcane_disc(cx, cz, burst_radius, color, 0.28 * fade, y=0.052, segments=32)
+        draw_arcane_disc(cx, cz, burst_radius * 0.55, PHOENIX_GOLD, 0.16 * fade, y=0.055, segments=24)
+
+        for i in range(12):
+            seed = value * 13 + i
+            ang = i * math.tau / 12 + time_seconds * 0.7
+            radius = 0.12 + progress * (0.38 + 0.14 * hash01(seed, i, 101))
+            sx = cx + math.cos(ang) * radius
+            sz = cz + math.sin(ang) * radius
+            sy = 0.28 + lift + 0.12 * math.sin(time_seconds * 4.0 + i)
+            spark_color = color if i % 3 else PHOENIX_GOLD
+            glPushMatrix()
+            glColor4f(spark_color[0], spark_color[1], spark_color[2], 0.68 * fade)
+            glTranslatef(sx, sy, sz)
+            gluSphere(quad, 0.018 + 0.018 * fade, 8, 8)
+            glPopMatrix()
+
+        if value in orb_labels:
+            tid, tw, th = orb_labels[value]
+            draw_text_billboard(
+                tid,
+                tw,
+                th,
+                cx=cx,
+                cy=0.95 + lift,
+                cz=cz,
+                cam_yaw=cam_yaw,
+                cam_pitch=cam_pitch,
+                half_h=0.24 + 0.08 * fade,
+                alpha=fade,
+            )
+            glDisable(GL_LIGHTING)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    glEnable(GL_LIGHTING)
+    glDisable(GL_BLEND)
+
+
 def draw_world(
     blocked,
     m_a,
@@ -887,11 +1019,15 @@ def draw_world(
     cam_yaw: float,
     cam_pitch: float,
     time_seconds: float,
+    now_ms: int,
     orb_labels: dict[int, tuple[int, int, int]],
     active_pos: tuple[int, int] | None = None,
     active_color: tuple[float, float, float] = ARCANE_BLUE,
     danger_pos: tuple[int, int] | None = None,
     danger_color: tuple[float, float, float] = PHOENIX_MAGIC,
+    render_pos_a: tuple[float, float] | None = None,
+    render_pos_b: tuple[float, float] | None = None,
+    collection_effects: list[tuple[tuple[int, int], int, int, tuple[float, float, float]]] | None = None,
 ) -> None:
     draw_labyrinth_backdrop(time_seconds, quad)
 
@@ -915,8 +1051,22 @@ def draw_world(
             orb_labels=orb_labels,
         )
 
-    draw_mage_magical(m_a.pos[0], m_a.pos[1], SERPENT_MAGIC, quad, time_seconds, phase=0.0, archetype="serpent")
-    draw_mage_magical(m_b.pos[0], m_b.pos[1], PHOENIX_MAGIC, quad, time_seconds, phase=1.7, archetype="phoenix")
+    if collection_effects:
+        draw_collection_effects(
+            collection_effects,
+            quad,
+            cam_yaw=cam_yaw,
+            cam_pitch=cam_pitch,
+            time_seconds=time_seconds,
+            now_ms=now_ms,
+            orb_labels=orb_labels,
+        )
+
+    max_mp = max(settings.START_MP * 3, m_a.mp, m_b.mp)
+    ax, ay = render_pos_a if render_pos_a is not None else (float(m_a.pos[0]), float(m_a.pos[1]))
+    bx, by = render_pos_b if render_pos_b is not None else (float(m_b.pos[0]), float(m_b.pos[1]))
+    draw_mage_magical(ax, ay, PHOENIX_MAGIC, quad, time_seconds, phase=0.0, archetype="phoenix", mp=m_a.mp, max_mp=max_mp)
+    draw_mage_magical(bx, by, SERPENT_MAGIC, quad, time_seconds, phase=1.7, archetype="serpent", mp=m_b.mp, max_mp=max_mp)
     draw_magic_particles(time_seconds, quad)
 
 
@@ -971,7 +1121,7 @@ def artifact_indicator(orbs) -> str:
 def draw_mp_bar(
     surf: pygame.Surface,
     rect: pygame.Rect,
-    value: int,
+    value: float,
     max_value: int,
     color: tuple[float, float, float],
 ) -> None:
@@ -991,8 +1141,8 @@ def draw_agent_panel(
     rect: pygame.Rect,
     *,
     name: str,
-    mp: int,
-    enemy_mp: int,
+    mp: float,
+    enemy_mp: float,
     max_mp: int,
     color: tuple[float, float, float],
     is_turn: bool,
@@ -1012,10 +1162,10 @@ def draw_agent_panel(
         label = font.render("TURN", True, (12, 14, 20))
         surf.blit(label, label.get_rect(center=turn_rect.center))
 
-    strategy = strategy_label(mp, enemy_mp)
+    strategy = strategy_label(int(round(mp)), int(round(enemy_mp)))
     render_fit_text(surf, font, f"Strategy: {strategy}", (188, 207, 222), (rect.x + 14, rect.y + 31), rect.width - 28)
     draw_mp_bar(surf, pygame.Rect(rect.x + 14, rect.y + 55, rect.width - 28, 15), mp, max_mp, color)
-    render_fit_text(surf, font, f"Magic Power {mp}/{max_mp}", (233, 218, 174), (rect.x + 14, rect.y + 75), rect.width - 28)
+    render_fit_text(surf, font, f"Magic Power {int(round(mp))}/{max_mp}", (233, 218, 174), (rect.x + 14, rect.y + 75), rect.width - 28)
 
 
 def hud_texture(
@@ -1024,6 +1174,8 @@ def hud_texture(
     *,
     m_a,
     m_b,
+    display_mp_a: float,
+    display_mp_b: float,
     orbs,
     sim_next: str,
     sim_paused: bool,
@@ -1048,14 +1200,14 @@ def hud_texture(
     surf.blit(subtitle, (20, 38))
 
     if winner:
-        winner_house = "Serpent A" if winner == "A" else "Phoenix B"
-        status = f"Duel result: {winner_house} wins | {last_line}"
+        winner_house = "Phoenix A" if winner == "A" else "Serpent B"
+        status = f"Duel result: {last_line or winner_house + ' wins'}"
         status_color = (255, 221, 154)
     elif sim_paused:
         status = "Status: paused | Space resumes the duel"
         status_color = (224, 210, 246)
     else:
-        next_house = "Serpent A" if sim_next == "a" else "Phoenix B"
+        next_house = "Phoenix A" if sim_next == "a" else "Serpent B"
         status = f"Turn: {next_house} | action in ~{max(0, int(sim_timer))} ms"
         status_color = (217, 232, 238)
 
@@ -1068,11 +1220,11 @@ def hud_texture(
         surf,
         font,
         pygame.Rect(298, 20, 270, 90),
-        name="Serpent A",
-        mp=m_a.mp,
-        enemy_mp=m_b.mp,
+        name="Phoenix A",
+        mp=display_mp_a,
+        enemy_mp=display_mp_b,
         max_mp=max_mp,
-        color=SERPENT_MAGIC,
+        color=PHOENIX_MAGIC,
         is_turn=sim_next == "a",
         winner=winner is not None,
     )
@@ -1080,11 +1232,11 @@ def hud_texture(
         surf,
         font,
         pygame.Rect(586, 20, 270, 90),
-        name="Phoenix B",
-        mp=m_b.mp,
-        enemy_mp=m_a.mp,
+        name="Serpent B",
+        mp=display_mp_b,
+        enemy_mp=display_mp_a,
         max_mp=max_mp,
-        color=PHOENIX_MAGIC,
+        color=SERPENT_MAGIC,
         is_turn=sim_next == "b",
         winner=winner is not None,
     )
@@ -1140,6 +1292,236 @@ def draw_hud_overlay(tex: int, tw: int, th: int) -> None:
     glEnable(GL_LIGHTING)
 
 
+def surface_to_texture(surf: pygame.Surface) -> tuple[int, int, int]:
+    w, h = surf.get_size()
+    tex = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex)
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    try:
+        raw = pygame.image.tobytes(surf, "RGBA", True)
+    except AttributeError:
+        raw = pygame.image.tostring(surf, "RGBA", True)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, raw)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    return int(tex), w, h
+
+
+def draw_fullscreen_overlay(tex: int, alpha: float = 1.0) -> None:
+    glDisable(GL_LIGHTING)
+    glDisable(GL_DEPTH_TEST)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, tex)
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, WIN_W, 0, WIN_H, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    glColor4f(1.0, 1.0, 1.0, clamp01(alpha))
+    glBegin(GL_QUADS)
+    glTexCoord2f(0, 0)
+    glVertex2f(0, 0)
+    glTexCoord2f(1, 0)
+    glVertex2f(WIN_W, 0)
+    glTexCoord2f(1, 1)
+    glVertex2f(WIN_W, WIN_H)
+    glTexCoord2f(0, 1)
+    glVertex2f(0, WIN_H)
+    glEnd()
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glDisable(GL_TEXTURE_2D)
+    glDisable(GL_BLEND)
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_LIGHTING)
+
+
+def restart_match(rng: random.Random):
+    blocked, m_a, m_b, orbs = new_game(rng)
+    return blocked, m_a, m_b, orbs
+
+
+def draw_ui_button(
+    surf: pygame.Surface,
+    text: str,
+    rect: pygame.Rect,
+    font: pygame.font.Font,
+    t: float,
+    *,
+    hovered: bool,
+    accent_rgb: tuple[int, int, int],
+) -> pygame.Rect:
+    pulse = 0.5 + 0.5 * math.sin(t * 5.0 + rect.x * 0.01)
+    extra = int(2 + 3 * pulse) if hovered else int(1 + 2 * pulse)
+    draw_rect = rect.inflate(extra * 2, extra * 2)
+    draw_rect.center = rect.center
+    fill = (22, 28, 44, 210) if not hovered else (30, 38, 58, 235)
+    edge_alpha = 160 + int(80 * pulse)
+    pygame.draw.rect(surf, fill, draw_rect, border_radius=10)
+    pygame.draw.rect(surf, (*accent_rgb, edge_alpha), draw_rect, width=2, border_radius=10)
+    glow_h = max(2, draw_rect.height // 4)
+    pygame.draw.rect(surf, (255, 255, 255, 34 if hovered else 22), pygame.Rect(draw_rect.x, draw_rect.y, draw_rect.width, glow_h), border_radius=10)
+    label = font.render(text, True, (238, 236, 222))
+    surf.blit(label, label.get_rect(center=draw_rect.center))
+    return draw_rect
+
+
+def update_ui_particles(ui_particles: list[dict], dt_ms: int) -> None:
+    dt = dt_ms / 1000.0
+    for p in ui_particles:
+        p["x"] += p["vx"] * dt
+        p["y"] += p["vy"] * dt
+        p["vy"] += 90.0 * dt
+        p["life"] -= dt
+    ui_particles[:] = [p for p in ui_particles if p["life"] > 0.0]
+
+
+def emit_ui_particles(ui_particles: list[dict], x: float, y: float, color: tuple[int, int, int], count: int = 16) -> None:
+    for i in range(count):
+        ang = (i / max(1, count)) * math.tau + random.random() * 0.2
+        speed = 55.0 + random.random() * 130.0
+        ui_particles.append(
+            {
+                "x": x,
+                "y": y,
+                "vx": math.cos(ang) * speed,
+                "vy": math.sin(ang) * speed - 45.0,
+                "life": 0.45 + random.random() * 0.45,
+                "size": 1.8 + random.random() * 2.8,
+                "color": color,
+            }
+        )
+
+
+def draw_ui_particles(surf: pygame.Surface, ui_particles: list[dict]) -> None:
+    for p in ui_particles:
+        fade = clamp01(p["life"] / 0.9)
+        rad = max(1, int(p["size"] * (0.7 + 0.6 * fade)))
+        c = p["color"]
+        pygame.draw.circle(surf, (c[0], c[1], c[2], int(200 * fade)), (int(p["x"]), int(p["y"])), rad)
+
+
+def update_floating_texts(floating_texts: list[dict], dt_ms: int) -> None:
+    dt = dt_ms / 1000.0
+    for f in floating_texts:
+        f["y"] += f.get("vy", -34.0) * dt
+        f["life"] -= dt
+    floating_texts[:] = [f for f in floating_texts if f["life"] > 0.0]
+
+
+def add_floating_text(
+    floating_texts: list[dict],
+    text: str,
+    color: tuple[int, int, int],
+    x: float,
+    y: float,
+    duration: float = 1.0,
+) -> None:
+    floating_texts.append({"text": text, "color": color, "x": x, "y": y, "life": duration, "duration": duration, "vy": -36.0})
+
+
+def draw_floating_texts(surf: pygame.Surface, font: pygame.font.Font, floating_texts: list[dict]) -> None:
+    for f in floating_texts:
+        fade = clamp01(f["life"] / max(f["duration"], 0.001))
+        txt = font.render(f["text"], True, f["color"])
+        txt.set_alpha(int(255 * fade))
+        shadow = font.render(f["text"], True, (0, 0, 0))
+        shadow.set_alpha(int(140 * fade))
+        pos = txt.get_rect(center=(int(f["x"]), int(f["y"])))
+        surf.blit(shadow, pos.move(2, 2))
+        surf.blit(txt, pos)
+
+
+def build_screen_overlay(
+    ui_state: str,
+    t: float,
+    mouse_pos: tuple[int, int],
+    *,
+    winner: str | None,
+    last_line: str,
+    button_font: pygame.font.Font,
+    title_font: pygame.font.Font,
+    body_font: pygame.font.Font,
+    ui_particles: list[dict],
+    floating_texts: list[dict],
+) -> tuple[pygame.Surface, dict[str, pygame.Rect]]:
+    surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    buttons: dict[str, pygame.Rect] = {}
+
+    if ui_state == SCREEN_RUNNING:
+        draw_ui_particles(surf, ui_particles)
+        draw_floating_texts(surf, body_font, floating_texts)
+        return surf, buttons
+
+    shade = 156 if ui_state in (SCREEN_PAUSE, SCREEN_GAME_OVER) else 206
+    pygame.draw.rect(surf, (4, 6, 14, shade), surf.get_rect())
+
+    heading = "The Arcane Trial"
+    subheading = "Enchanted Labyrinth Duel"
+    if ui_state == SCREEN_INSTRUCTIONS:
+        heading = "Instructions"
+        subheading = "Master movement and magical strategy"
+    elif ui_state == SCREEN_PAUSE:
+        heading = "Paused"
+        subheading = "The labyrinth waits for your command"
+    elif ui_state == SCREEN_GAME_OVER:
+        heading = "Duel Concluded"
+        subheading = last_line or "A winner has emerged"
+
+    title = title_font.render(heading, True, (240, 226, 194))
+    sub = body_font.render(subheading, True, (172, 188, 220))
+    surf.blit(title, title.get_rect(center=(WIN_W // 2, 146)))
+    surf.blit(sub, sub.get_rect(center=(WIN_W // 2, 186)))
+
+    base_y = 278
+    if ui_state == SCREEN_TITLE:
+        start_rect = pygame.Rect(WIN_W // 2 - 124, base_y, 248, 52)
+        ins_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 72, 248, 52)
+        quit_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 144, 248, 52)
+        buttons["start"] = draw_ui_button(surf, "Start Duel", start_rect, button_font, t, hovered=start_rect.collidepoint(mouse_pos), accent_rgb=(94, 198, 255))
+        buttons["instructions"] = draw_ui_button(surf, "Instructions", ins_rect, button_font, t, hovered=ins_rect.collidepoint(mouse_pos), accent_rgb=(125, 228, 188))
+        buttons["quit"] = draw_ui_button(surf, "Quit", quit_rect, button_font, t, hovered=quit_rect.collidepoint(mouse_pos), accent_rgb=(226, 132, 128))
+    elif ui_state == SCREEN_INSTRUCTIONS:
+        lines = [
+            "Objective: collect artifacts to raise MP, then overpower the opponent.",
+            "Controls: LMB drag orbit, wheel zoom, [ ] yaw, ' ; pitch.",
+            "Simulation: alternates A then B with timed pauses.",
+            "Tactics: lower MP should evade, higher MP should pursue.",
+        ]
+        y = 260
+        for ln in lines:
+            txt = body_font.render(ln, True, (214, 224, 236))
+            surf.blit(txt, txt.get_rect(center=(WIN_W // 2, y)))
+            y += 32
+        back_rect = pygame.Rect(WIN_W // 2 - 110, y + 20, 220, 50)
+        buttons["back"] = draw_ui_button(surf, "Back", back_rect, button_font, t, hovered=back_rect.collidepoint(mouse_pos), accent_rgb=(118, 210, 255))
+    elif ui_state == SCREEN_PAUSE:
+        resume_rect = pygame.Rect(WIN_W // 2 - 124, base_y, 248, 52)
+        restart_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 72, 248, 52)
+        title_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 144, 248, 52)
+        buttons["resume"] = draw_ui_button(surf, "Resume", resume_rect, button_font, t, hovered=resume_rect.collidepoint(mouse_pos), accent_rgb=(120, 225, 188))
+        buttons["restart"] = draw_ui_button(surf, "Restart Match", restart_rect, button_font, t, hovered=restart_rect.collidepoint(mouse_pos), accent_rgb=(241, 192, 92))
+        buttons["title"] = draw_ui_button(surf, "Title Screen", title_rect, button_font, t, hovered=title_rect.collidepoint(mouse_pos), accent_rgb=(120, 182, 255))
+    elif ui_state == SCREEN_GAME_OVER:
+        winner_text = "Winner: Phoenix A" if winner == "A" else "Winner: Serpent B" if winner == "B" else "No decisive winner"
+        wt = body_font.render(winner_text, True, (255, 224, 166))
+        surf.blit(wt, wt.get_rect(center=(WIN_W // 2, 238)))
+        restart_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 20, 248, 52)
+        title_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 92, 248, 52)
+        buttons["restart"] = draw_ui_button(surf, "Restart Match", restart_rect, button_font, t, hovered=restart_rect.collidepoint(mouse_pos), accent_rgb=(241, 192, 92))
+        buttons["title"] = draw_ui_button(surf, "Title Screen", title_rect, button_font, t, hovered=title_rect.collidepoint(mouse_pos), accent_rgb=(120, 182, 255))
+
+    draw_ui_particles(surf, ui_particles)
+    draw_floating_texts(surf, body_font, floating_texts)
+    return surf, buttons
+
+
 def set_camera(yaw: float, pitch: float, distance: float) -> None:
     """
     Orbit camera on a sphere around maze centre (yaw = radians around Y, pitch = elevation).
@@ -1162,6 +1544,9 @@ def main() -> None:
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 16)
     title_font = pygame.font.SysFont("georgia", 19, bold=True)
+    menu_title_font = pygame.font.SysFont("georgia", 42, bold=True)
+    menu_button_font = pygame.font.SysFont("georgia", 22, bold=True)
+    menu_body_font = pygame.font.SysFont("consolas", 19)
 
     setup_gl()
     quad = gluNewQuadric()
@@ -1173,7 +1558,6 @@ def main() -> None:
     blocked, m_a, m_b, orbs = new_game(rng)
     sim_timer = SUBSTEP_PAUSE_MS
     sim_next: str = "a"
-    sim_paused = False
     winner: str | None = None
     last_line = ""
     substep = "-"
@@ -1182,30 +1566,100 @@ def main() -> None:
     cam_dist = float(GRID) * 1.45
     hud_tex: int | None = None
     hud_tw = hud_th = 0
+    move_anim_a: tuple[tuple[int, int], tuple[int, int], int] | None = None
+    move_anim_b: tuple[tuple[int, int], tuple[int, int], int] | None = None
+    collection_effects: list[tuple[tuple[int, int], int, int, tuple[float, float, float]]] = []
+    ui_particles: list[dict] = []
+    floating_texts: list[dict] = []
+    ui_state = SCREEN_TITLE
+    transition_target: str | None = None
+    transition_alpha = 1.0
+    transition_dir = -1
+    active_buttons: dict[str, pygame.Rect] = {}
+    display_mp_a = float(m_a.mp)
+    display_mp_b = float(m_b.mp)
+    ambient_emit = 0.0
+
+    def reset_world(keep_camera: bool = False) -> None:
+        nonlocal blocked, m_a, m_b, orbs
+        nonlocal sim_timer, sim_next, winner, last_line, substep
+        nonlocal cam_yaw, cam_pitch, cam_dist
+        nonlocal move_anim_a, move_anim_b, collection_effects
+        nonlocal display_mp_a, display_mp_b
+        blocked, m_a, m_b, orbs = restart_match(rng)
+        sim_timer = SUBSTEP_PAUSE_MS
+        sim_next = "a"
+        winner = None
+        last_line = ""
+        substep = "-"
+        if not keep_camera:
+            cam_yaw = 0.65
+            cam_pitch = 0.52
+            cam_dist = float(GRID) * 1.45
+        move_anim_a = None
+        move_anim_b = None
+        collection_effects.clear()
+        display_mp_a = float(m_a.mp)
+        display_mp_b = float(m_b.mp)
+
+    def request_screen(next_state: str) -> None:
+        nonlocal ui_state, transition_target, transition_dir
+        if ui_state == next_state and transition_dir == 0:
+            return
+        transition_target = next_state
+        transition_dir = 1
+
+    def run_button_action(action: str) -> bool:
+        nonlocal running, ui_state
+        if action == "start":
+            reset_world(keep_camera=True)
+            emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.48, (100, 216, 255), count=24)
+            request_screen(SCREEN_RUNNING)
+        elif action == "instructions":
+            request_screen(SCREEN_INSTRUCTIONS)
+        elif action == "quit":
+            running = False
+            return False
+        elif action == "back":
+            request_screen(SCREEN_TITLE)
+        elif action == "resume":
+            request_screen(SCREEN_RUNNING)
+        elif action == "restart":
+            reset_world(keep_camera=True)
+            emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.52, (242, 194, 102), count=28)
+            request_screen(SCREEN_RUNNING)
+        elif action == "title":
+            request_screen(SCREEN_TITLE)
+        return True
+
     running = True
 
     while running:
         dt = clock.tick(60)
+        time_seconds = pygame.time.get_ticks() / 1000.0
+        mouse_pos = pygame.mouse.get_pos()
+        gameplay_active = ui_state == SCREEN_RUNNING and transition_dir == 0 and winner is None
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    running = False
+                    if ui_state == SCREEN_RUNNING and winner is None:
+                        request_screen(SCREEN_PAUSE)
+                    elif ui_state in (SCREEN_PAUSE, SCREEN_INSTRUCTIONS, SCREEN_GAME_OVER):
+                        request_screen(SCREEN_TITLE)
+                    else:
+                        running = False
                 elif event.key == pygame.K_r:
-                    blocked, m_a, m_b, orbs = new_game(rng)
-                    sim_timer = SUBSTEP_PAUSE_MS
-                    sim_next = "a"
-                    sim_paused = False
-                    winner = None
-                    last_line = ""
-                    substep = "-"
-                    cam_yaw = 0.65
-                    cam_pitch = 0.52
-                    cam_dist = float(GRID) * 1.45
+                    reset_world(keep_camera=True)
+                    emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.52, (238, 210, 116), count=20)
+                    request_screen(SCREEN_RUNNING)
                 elif event.key == pygame.K_SPACE:
-                    sim_paused = not sim_paused
+                    if ui_state == SCREEN_RUNNING and winner is None:
+                        request_screen(SCREEN_PAUSE)
+                    elif ui_state == SCREEN_PAUSE:
+                        request_screen(SCREEN_RUNNING)
                 elif event.key == pygame.K_LEFTBRACKET:
                     cam_yaw -= 0.08
                 elif event.key == pygame.K_RIGHTBRACKET:
@@ -1218,15 +1672,47 @@ def main() -> None:
                     cam_dist = min(32.0, cam_dist + 0.75)
                 elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
                     cam_dist = max(4.0, cam_dist - 0.75)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if ui_state != SCREEN_RUNNING:
+                    for action, rect in active_buttons.items():
+                        if rect.collidepoint(event.pos):
+                            if not run_button_action(action):
+                                break
+                            emit_ui_particles(ui_particles, float(event.pos[0]), float(event.pos[1]), (130, 210, 255), count=10)
+                            break
             elif event.type == pygame.MOUSEMOTION:
-                if event.buttons[0]:
+                if event.buttons[0] and (ui_state == SCREEN_RUNNING or ui_state == SCREEN_TITLE):
                     cam_yaw += event.rel[0] * 0.01
                     cam_pitch -= event.rel[1] * 0.01
                     cam_pitch = max(0.12, min(1.38, cam_pitch))
             elif event.type == pygame.MOUSEWHEEL:
                 cam_dist = max(4.0, min(32.0, cam_dist - event.y * 0.9))
 
-        if winner is None and not sim_paused:
+        if transition_dir != 0:
+            transition_alpha += (dt / FADE_DURATION_MS) * transition_dir
+            transition_alpha = clamp01(transition_alpha)
+            if transition_dir > 0 and transition_alpha >= 1.0:
+                if transition_target is not None:
+                    ui_state = transition_target
+                    transition_target = None
+                transition_dir = -1
+            elif transition_dir < 0 and transition_alpha <= 0.0:
+                transition_dir = 0
+
+        if ui_state != SCREEN_RUNNING:
+            ambient_emit += dt
+            if ambient_emit > 120:
+                ambient_emit = 0.0
+                x = random.uniform(WIN_W * 0.2, WIN_W * 0.8)
+                y = random.uniform(WIN_H * 0.15, WIN_H * 0.85)
+                emit_ui_particles(ui_particles, x, y, (118, 174, 255), count=1)
+
+        update_ui_particles(ui_particles, dt)
+        update_floating_texts(floating_texts, dt)
+        display_mp_a += (m_a.mp - display_mp_a) * min(1.0, dt * 0.012)
+        display_mp_b += (m_b.mp - display_mp_b) * min(1.0, dt * 0.012)
+
+        if gameplay_active:
             sim_timer -= dt
             if sim_timer <= 0:
                 if sim_next == "a":
@@ -1242,17 +1728,34 @@ def main() -> None:
                         rng=rng,
                         prev_pos=m_a.prev_pos,
                     )
+                    old_pos = m_a.pos
                     commit_move(m_a, pa)
+                    step_ms = pygame.time.get_ticks()
+                    if m_a.pos != old_pos:
+                        move_anim_a = (old_pos, m_a.pos, step_ms)
+                    collected = [(o.pos, o.value) for o in orbs if o.pos == m_a.pos]
+                    for pos, value in collected:
+                        collection_effects.append((pos, value, step_ms, PHOENIX_MAGIC))
+                        add_floating_text(floating_texts, f"+{value} MP", (132, 225, 255), WIN_W * 0.34, WIN_H * 0.17)
+                        emit_ui_particles(ui_particles, WIN_W * 0.34, WIN_H * 0.2, (132, 225, 255), count=8)
                     orbs = collect_for_mage(m_a, orbs)
                     orbs = respawn_orbs_fill(rng, blocked, m_a, m_b, orbs)
-                    last_line = f"1/2 Serpent A -> {m_a.pos}"
+                    pickup_note = f" | +{sum(value for _, value in collected)} MP" if collected else ""
+                    last_line = f"1/2 Phoenix A -> {m_a.pos}{pickup_note}"
                     cap = check_capture(m_a, m_b)
                     if cap == "A":
-                        winner, last_line = "A", "A wins (higher MP)"
+                        winner, last_line = "A", "Phoenix A wins (higher MP)"
+                        add_floating_text(floating_texts, "Phoenix A Ascends", (131, 220, 255), WIN_W * 0.5, WIN_H * 0.26, 1.5)
                     elif cap == "B":
-                        winner, last_line = "B", "B wins (higher MP)"
+                        winner, last_line = "B", "Serpent B wins (higher MP)"
+                        add_floating_text(floating_texts, "Serpent B Dominates", (255, 145, 105), WIN_W * 0.5, WIN_H * 0.26, 1.5)
                     elif cap == "tie":
+                        old_a, old_b = m_a.pos, m_b.pos
                         separate_equal_duel(blocked, m_a, m_b, rng)
+                        if m_a.pos != old_a:
+                            move_anim_a = (old_a, m_a.pos, pygame.time.get_ticks())
+                        if m_b.pos != old_b:
+                            move_anim_b = (old_b, m_b.pos, pygame.time.get_ticks())
                         last_line = "Equal MP - separated"
                     if winner is None:
                         sim_next = "b"
@@ -1271,29 +1774,50 @@ def main() -> None:
                         rollouts=settings.MONTE_CARLO_ROLLOUTS,
                         depth=settings.MONTE_CARLO_DEPTH,
                     )
+                    old_pos = m_b.pos
                     commit_move(m_b, pb)
+                    step_ms = pygame.time.get_ticks()
+                    if m_b.pos != old_pos:
+                        move_anim_b = (old_pos, m_b.pos, step_ms)
+                    collected = [(o.pos, o.value) for o in orbs if o.pos == m_b.pos]
+                    for pos, value in collected:
+                        collection_effects.append((pos, value, step_ms, SERPENT_MAGIC))
+                        add_floating_text(floating_texts, f"+{value} MP", (255, 169, 138), WIN_W * 0.66, WIN_H * 0.17)
+                        emit_ui_particles(ui_particles, WIN_W * 0.66, WIN_H * 0.2, (255, 169, 138), count=8)
                     orbs = collect_for_mage(m_b, orbs)
                     orbs = respawn_orbs_fill(rng, blocked, m_a, m_b, orbs)
-                    last_line = f"2/2 Phoenix B -> {m_b.pos}"
+                    pickup_note = f" | +{sum(value for _, value in collected)} MP" if collected else ""
+                    last_line = f"2/2 Serpent B -> {m_b.pos}{pickup_note}"
                     cap = check_capture(m_a, m_b)
                     if cap == "A":
-                        winner, last_line = "A", "A wins (higher MP)"
+                        winner, last_line = "A", "Phoenix A wins (higher MP)"
+                        add_floating_text(floating_texts, "Phoenix A Ascends", (131, 220, 255), WIN_W * 0.5, WIN_H * 0.26, 1.5)
                     elif cap == "B":
-                        winner, last_line = "B", "B wins (higher MP)"
+                        winner, last_line = "B", "Serpent B wins (higher MP)"
+                        add_floating_text(floating_texts, "Serpent B Dominates", (255, 145, 105), WIN_W * 0.5, WIN_H * 0.26, 1.5)
                     elif cap == "tie":
+                        old_a, old_b = m_a.pos, m_b.pos
                         separate_equal_duel(blocked, m_a, m_b, rng)
+                        if m_a.pos != old_a:
+                            move_anim_a = (old_a, m_a.pos, pygame.time.get_ticks())
+                        if m_b.pos != old_b:
+                            move_anim_b = (old_b, m_b.pos, pygame.time.get_ticks())
                         last_line = "Equal MP - separated"
                     if winner is None:
                         sim_next = "a"
                         sim_timer = SUBSTEP_PAUSE_MS + PAUSE_BETWEEN_ROUNDS_MS
 
+        if winner is not None and ui_state == SCREEN_RUNNING:
+            emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.32, (244, 196, 108), count=38)
+            request_screen(SCREEN_GAME_OVER)
+
         if winner is None:
-            next_house = "Serpent A" if sim_next == "a" else "Phoenix B"
+            next_house = "Phoenix A" if sim_next == "a" else "Serpent B"
             wait_note = f" | wait ~{max(0, int(sim_timer))} ms -> {next_house}"
-            if sim_paused:
+            if ui_state != SCREEN_RUNNING or transition_dir != 0:
                 wait_note = " | PAUSED (Space)"
             substep = (
-                f"Serpent A: {mp_mode_label(m_a.mp, m_b.mp)} | Phoenix B: {mp_mode_label(m_b.mp, m_a.mp)} "
+                f"Phoenix A: {mp_mode_label(m_a.mp, m_b.mp)} | Serpent B: {mp_mode_label(m_b.mp, m_a.mp)} "
                 f"| MP A={m_a.mp} B={m_b.mp}{wait_note}"
             )
 
@@ -1310,16 +1834,26 @@ def main() -> None:
         glLoadIdentity()
         set_camera(cam_yaw, cam_pitch, cam_dist)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        now_ms = pygame.time.get_ticks()
+        time_seconds = now_ms / 1000.0
+        move_anim_a = move_anim_a if move_anim_a is None or now_ms - move_anim_a[2] < MOVE_ANIM_MS else None
+        move_anim_b = move_anim_b if move_anim_b is None or now_ms - move_anim_b[2] < MOVE_ANIM_MS else None
+        collection_effects = [
+            effect for effect in collection_effects if now_ms - effect[2] < COLLECTION_EFFECT_MS
+        ]
+        render_pos_a = animated_grid_pos(m_a.pos, move_anim_a, now_ms)
+        render_pos_b = animated_grid_pos(m_b.pos, move_anim_b, now_ms)
+
         if winner is None:
             active_pos = m_a.pos if sim_next == "a" else m_b.pos
-            active_color = SERPENT_MAGIC if sim_next == "a" else PHOENIX_MAGIC
+            active_color = PHOENIX_MAGIC if sim_next == "a" else SERPENT_MAGIC
             danger_pos = m_b.pos if sim_next == "a" else m_a.pos
-            danger_color = PHOENIX_MAGIC if sim_next == "a" else SERPENT_MAGIC
+            danger_color = SERPENT_MAGIC if sim_next == "a" else PHOENIX_MAGIC
         else:
             active_pos = None
             active_color = ARCANE_BLUE
             danger_pos = None
-            danger_color = PHOENIX_MAGIC
+            danger_color = SERPENT_MAGIC
 
         draw_world(
             blocked,
@@ -1329,12 +1863,16 @@ def main() -> None:
             quad,
             cam_yaw=cam_yaw,
             cam_pitch=cam_pitch,
-            time_seconds=pygame.time.get_ticks() / 1000.0,
+            time_seconds=time_seconds,
+            now_ms=now_ms,
             orb_labels=orb_labels,
             active_pos=active_pos,
             active_color=active_color,
             danger_pos=danger_pos,
             danger_color=danger_color,
+            render_pos_a=render_pos_a,
+            render_pos_b=render_pos_b,
+            collection_effects=collection_effects,
         )
 
         if hud_tex is not None:
@@ -1344,9 +1882,11 @@ def main() -> None:
             title_font,
             m_a=m_a,
             m_b=m_b,
+            display_mp_a=display_mp_a,
+            display_mp_b=display_mp_b,
             orbs=orbs,
             sim_next=sim_next,
-            sim_paused=sim_paused,
+            sim_paused=ui_state != SCREEN_RUNNING,
             winner=winner,
             last_line=last_line or "The labyrinth is listening.",
             sim_timer=sim_timer,
@@ -1354,6 +1894,29 @@ def main() -> None:
         hud_tex = int(tid)
         glViewport(0, 0, WIN_W, WIN_H)
         draw_hud_overlay(int(hud_tex), hud_tw, hud_th)
+
+        overlay_surf, active_buttons = build_screen_overlay(
+            ui_state,
+            time_seconds,
+            mouse_pos,
+            winner=winner,
+            last_line=last_line,
+            button_font=menu_button_font,
+            title_font=menu_title_font,
+            body_font=menu_body_font,
+            ui_particles=ui_particles,
+            floating_texts=floating_texts,
+        )
+        ui_tex, _, _ = surface_to_texture(overlay_surf)
+        draw_fullscreen_overlay(ui_tex)
+        glDeleteTextures(int(ui_tex))
+
+        if transition_alpha > 0.0:
+            fade = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+            fade.fill((0, 0, 0, int(255 * transition_alpha)))
+            fade_tex, _, _ = surface_to_texture(fade)
+            draw_fullscreen_overlay(fade_tex)
+            glDeleteTextures(int(fade_tex))
 
         pygame.display.flip()
 
