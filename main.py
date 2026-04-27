@@ -146,6 +146,13 @@ SCREEN_RUNNING = "running"
 SCREEN_PAUSE = "pause"
 SCREEN_GAME_OVER = "game_over"
 
+GAME_MODE_AI = "ai"
+GAME_MODE_LOCAL = "local"
+
+AI_TURN_DELAY_MIN_MS = 50.0
+AI_TURN_DELAY_MAX_MS = 2000.0
+AI_TURN_DELAY_STEP_MS = 50.0
+
 
 def cell_center(gx: int, gy: int) -> tuple[float, float, float]:
     return (gx + 0.5) * TILE, 0.0, (gy + 0.5) * TILE
@@ -1147,6 +1154,7 @@ def draw_agent_panel(
     color: tuple[float, float, float],
     is_turn: bool,
     winner: bool,
+    manual_mode: bool = False,
 ) -> None:
     base = rgb_bytes(mix_rgb(color, (0.018, 0.022, 0.04), 0.82))
     edge = rgb_bytes(mix_rgb(color, (1.0, 1.0, 1.0), 0.24))
@@ -1162,8 +1170,8 @@ def draw_agent_panel(
         label = font.render("TURN", True, (12, 14, 20))
         surf.blit(label, label.get_rect(center=turn_rect.center))
 
-    strategy = strategy_label(int(round(mp)), int(round(enemy_mp)))
-    render_fit_text(surf, font, f"Strategy: {strategy}", (188, 207, 222), (rect.x + 14, rect.y + 31), rect.width - 28)
+    strategy = "Player Control" if manual_mode else strategy_label(int(round(mp)), int(round(enemy_mp)))
+    render_fit_text(surf, font, f"Mode: {strategy}", (188, 207, 222), (rect.x + 14, rect.y + 31), rect.width - 28)
     draw_mp_bar(surf, pygame.Rect(rect.x + 14, rect.y + 55, rect.width - 28, 15), mp, max_mp, color)
     render_fit_text(surf, font, f"Magic Power {int(round(mp))}/{max_mp}", (233, 218, 174), (rect.x + 14, rect.y + 75), rect.width - 28)
 
@@ -1182,6 +1190,8 @@ def hud_texture(
     winner: str | None,
     last_line: str,
     sim_timer: float,
+    game_mode: str,
+    ai_turn_delay_ms: float,
 ) -> tuple[int, int, int]:
     surf = pygame.Surface((WIN_W, HUD_HEIGHT), pygame.SRCALPHA)
     for y in range(HUD_HEIGHT):
@@ -1206,6 +1216,10 @@ def hud_texture(
     elif sim_paused:
         status = "Status: paused | Space resumes the duel"
         status_color = (224, 210, 246)
+    elif game_mode == GAME_MODE_LOCAL:
+        next_house = "Phoenix A" if sim_next == "a" else "Serpent B"
+        status = f"Turn: {next_house} | choose a move"
+        status_color = (217, 232, 238)
     else:
         next_house = "Phoenix A" if sim_next == "a" else "Serpent B"
         status = f"Turn: {next_house} | action in ~{max(0, int(sim_timer))} ms"
@@ -1213,7 +1227,12 @@ def hud_texture(
 
     render_fit_text(surf, font, status, status_color, (20, 60), 258)
     render_fit_text(surf, font, artifact_indicator(orbs), (182, 224, 218), (20, 80), 258)
-    render_fit_text(surf, font, "Drag orbit | Wheel zoom | Space pause | R reset", (143, 158, 184), (20, 101), 258)
+    controls = (
+        "WASD/Arrows move | Space pause | R reset"
+        if game_mode == GAME_MODE_LOCAL
+        else f"AI {int(ai_turn_delay_ms)}ms | , fast | . slow"
+    )
+    render_fit_text(surf, font, controls, (143, 158, 184), (20, 101), 258)
 
     max_mp = max(20, ((max(m_a.mp, m_b.mp, settings.START_MP) + 9) // 10) * 10)
     draw_agent_panel(
@@ -1227,6 +1246,7 @@ def hud_texture(
         color=PHOENIX_MAGIC,
         is_turn=sim_next == "a",
         winner=winner is not None,
+        manual_mode=game_mode == GAME_MODE_LOCAL,
     )
     draw_agent_panel(
         surf,
@@ -1239,6 +1259,7 @@ def hud_texture(
         color=SERPENT_MAGIC,
         is_turn=sim_next == "b",
         winner=winner is not None,
+        manual_mode=game_mode == GAME_MODE_LOCAL,
     )
 
     w, h = surf.get_size()
@@ -1450,6 +1471,7 @@ def build_screen_overlay(
     body_font: pygame.font.Font,
     ui_particles: list[dict],
     floating_texts: list[dict],
+    game_mode: str,
 ) -> tuple[pygame.Surface, dict[str, pygame.Rect]]:
     surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
     buttons: dict[str, pygame.Rect] = {}
@@ -1481,17 +1503,21 @@ def build_screen_overlay(
 
     base_y = 278
     if ui_state == SCREEN_TITLE:
-        start_rect = pygame.Rect(WIN_W // 2 - 124, base_y, 248, 52)
-        ins_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 72, 248, 52)
-        quit_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 144, 248, 52)
-        buttons["start"] = draw_ui_button(surf, "Start Duel", start_rect, button_font, t, hovered=start_rect.collidepoint(mouse_pos), accent_rgb=(94, 198, 255))
-        buttons["instructions"] = draw_ui_button(surf, "Instructions", ins_rect, button_font, t, hovered=ins_rect.collidepoint(mouse_pos), accent_rgb=(125, 228, 188))
+        ai_rect = pygame.Rect(WIN_W // 2 - 124, base_y, 248, 52)
+        local_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 72, 248, 52)
+        ins_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 144, 248, 52)
+        quit_rect = pygame.Rect(WIN_W // 2 - 124, base_y + 216, 248, 52)
+        buttons["start_ai"] = draw_ui_button(surf, "AI Duel", ai_rect, button_font, t, hovered=ai_rect.collidepoint(mouse_pos), accent_rgb=(94, 198, 255))
+        buttons["start_local"] = draw_ui_button(surf, "2 Players", local_rect, button_font, t, hovered=local_rect.collidepoint(mouse_pos), accent_rgb=(125, 228, 188))
+        buttons["instructions"] = draw_ui_button(surf, "Instructions", ins_rect, button_font, t, hovered=ins_rect.collidepoint(mouse_pos), accent_rgb=(167, 158, 246))
         buttons["quit"] = draw_ui_button(surf, "Quit", quit_rect, button_font, t, hovered=quit_rect.collidepoint(mouse_pos), accent_rgb=(226, 132, 128))
     elif ui_state == SCREEN_INSTRUCTIONS:
         lines = [
             "Objective: collect artifacts to raise MP, then overpower the opponent.",
             "Controls: LMB drag orbit, wheel zoom, [ ] yaw, ' ; pitch.",
-            "Simulation: alternates A then B with timed pauses.",
+            "AI Duel: alternates A then B with timed pauses.",
+            "AI speed: press comma for faster turns, period for slower turns.",
+            "2 Players: use WASD or arrow keys to move the active mage.",
             "Tactics: lower MP should evade, higher MP should pursue.",
         ]
         y = 260
@@ -1579,6 +1605,8 @@ def main() -> None:
     display_mp_a = float(m_a.mp)
     display_mp_b = float(m_b.mp)
     ambient_emit = 0.0
+    game_mode = GAME_MODE_AI
+    ai_turn_delay_ms = float(SUBSTEP_PAUSE_MS)
 
     def reset_world(keep_camera: bool = False) -> None:
         nonlocal blocked, m_a, m_b, orbs
@@ -1587,7 +1615,7 @@ def main() -> None:
         nonlocal move_anim_a, move_anim_b, collection_effects
         nonlocal display_mp_a, display_mp_b
         blocked, m_a, m_b, orbs = restart_match(rng)
-        sim_timer = SUBSTEP_PAUSE_MS
+        sim_timer = 0.0 if game_mode == GAME_MODE_LOCAL else ai_turn_delay_ms
         sim_next = "a"
         winner = None
         last_line = ""
@@ -1609,11 +1637,113 @@ def main() -> None:
         transition_target = next_state
         transition_dir = 1
 
+    def key_move_delta(key: int) -> tuple[int, int] | None:
+        if key in (pygame.K_w, pygame.K_UP):
+            return (0, -1)
+        if key in (pygame.K_s, pygame.K_DOWN):
+            return (0, 1)
+        if key in (pygame.K_a, pygame.K_LEFT):
+            return (-1, 0)
+        if key in (pygame.K_d, pygame.K_RIGHT):
+            return (1, 0)
+        return None
+
+    def ai_turn_wait_after(side: str) -> float:
+        wait = ai_turn_delay_ms
+        if side == "b":
+            wait += PAUSE_BETWEEN_ROUNDS_MS
+        return wait
+
+    def adjust_ai_turn_delay(delta_ms: float) -> bool:
+        nonlocal ai_turn_delay_ms, sim_timer, last_line
+        if game_mode != GAME_MODE_AI:
+            return False
+
+        old_delay = ai_turn_delay_ms
+        ai_turn_delay_ms = max(AI_TURN_DELAY_MIN_MS, min(AI_TURN_DELAY_MAX_MS, ai_turn_delay_ms + delta_ms))
+        if ai_turn_delay_ms == old_delay:
+            return True
+
+        if gameplay_active:
+            sim_timer = max(0.0, sim_timer + (ai_turn_delay_ms - old_delay))
+        last_line = f"AI turn time: {int(ai_turn_delay_ms)} ms"
+        return True
+
+    def finish_turn(side: str, old_pos: tuple[int, int], step_ms: int) -> None:
+        nonlocal orbs, winner, last_line, sim_next, sim_timer, move_anim_a, move_anim_b
+
+        mage = m_a if side == "a" else m_b
+        name = "Phoenix A" if side == "a" else "Serpent B"
+        color = PHOENIX_MAGIC if side == "a" else SERPENT_MAGIC
+        text_color = (132, 225, 255) if side == "a" else (255, 169, 138)
+        float_x = WIN_W * (0.34 if side == "a" else 0.66)
+
+        if mage.pos != old_pos:
+            if side == "a":
+                move_anim_a = (old_pos, mage.pos, step_ms)
+            else:
+                move_anim_b = (old_pos, mage.pos, step_ms)
+
+        collected = [(o.pos, o.value) for o in orbs if o.pos == mage.pos]
+        for pos, value in collected:
+            collection_effects.append((pos, value, step_ms, color))
+            add_floating_text(floating_texts, f"+{value} MP", text_color, float_x, WIN_H * 0.17)
+            emit_ui_particles(ui_particles, float_x, WIN_H * 0.2, text_color, count=8)
+        orbs = collect_for_mage(mage, orbs)
+        orbs = respawn_orbs_fill(rng, blocked, m_a, m_b, orbs)
+        pickup_note = f" | +{sum(value for _, value in collected)} MP" if collected else ""
+        last_line = f"{'1/2' if side == 'a' else '2/2'} {name} -> {mage.pos}{pickup_note}"
+
+        cap = check_capture(m_a, m_b)
+        if cap == "A":
+            winner, last_line = "A", "Phoenix A wins (higher MP)"
+            add_floating_text(floating_texts, "Phoenix A Ascends", (131, 220, 255), WIN_W * 0.5, WIN_H * 0.26, 1.5)
+        elif cap == "B":
+            winner, last_line = "B", "Serpent B wins (higher MP)"
+            add_floating_text(floating_texts, "Serpent B Dominates", (255, 145, 105), WIN_W * 0.5, WIN_H * 0.26, 1.5)
+        elif cap == "tie":
+            old_a, old_b = m_a.pos, m_b.pos
+            separate_equal_duel(blocked, m_a, m_b, rng)
+            if m_a.pos != old_a:
+                move_anim_a = (old_a, m_a.pos, pygame.time.get_ticks())
+            if m_b.pos != old_b:
+                move_anim_b = (old_b, m_b.pos, pygame.time.get_ticks())
+            last_line = "Equal MP - separated"
+
+        if winner is None:
+            sim_next = "b" if side == "a" else "a"
+            sim_timer = 0.0 if game_mode == GAME_MODE_LOCAL else ai_turn_wait_after(side)
+
+    def try_manual_move(key: int) -> bool:
+        nonlocal last_line
+        delta = key_move_delta(key)
+        if delta is None:
+            return False
+
+        mage = m_a if sim_next == "a" else m_b
+        name = "Phoenix A" if sim_next == "a" else "Serpent B"
+        nx, ny = mage.pos[0] + delta[0], mage.pos[1] + delta[1]
+        if not (0 <= nx < GRID and 0 <= ny < GRID) or blocked[ny][nx]:
+            last_line = f"{name} cannot move there"
+            return True
+
+        old_pos = mage.pos
+        commit_move(mage, (nx, ny))
+        finish_turn(sim_next, old_pos, pygame.time.get_ticks())
+        return True
+
     def run_button_action(action: str) -> bool:
-        nonlocal running, ui_state
-        if action == "start":
+        nonlocal running, ui_state, game_mode, last_line
+        if action == "start_ai":
+            game_mode = GAME_MODE_AI
             reset_world(keep_camera=True)
             emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.48, (100, 216, 255), count=24)
+            request_screen(SCREEN_RUNNING)
+        elif action == "start_local":
+            game_mode = GAME_MODE_LOCAL
+            reset_world(keep_camera=True)
+            last_line = "2 Players: Phoenix A moves first"
+            emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.48, (125, 228, 188), count=24)
             request_screen(SCREEN_RUNNING)
         elif action == "instructions":
             request_screen(SCREEN_INSTRUCTIONS)
@@ -1660,6 +1790,12 @@ def main() -> None:
                         request_screen(SCREEN_PAUSE)
                     elif ui_state == SCREEN_PAUSE:
                         request_screen(SCREEN_RUNNING)
+                elif event.key in (pygame.K_COMMA, pygame.K_PERIOD) and adjust_ai_turn_delay(
+                    -AI_TURN_DELAY_STEP_MS if event.key == pygame.K_COMMA else AI_TURN_DELAY_STEP_MS
+                ):
+                    pass
+                elif game_mode == GAME_MODE_LOCAL and gameplay_active and try_manual_move(event.key):
+                    pass
                 elif event.key == pygame.K_LEFTBRACKET:
                     cam_yaw -= 0.08
                 elif event.key == pygame.K_RIGHTBRACKET:
@@ -1712,7 +1848,7 @@ def main() -> None:
         display_mp_a += (m_a.mp - display_mp_a) * min(1.0, dt * 0.012)
         display_mp_b += (m_b.mp - display_mp_b) * min(1.0, dt * 0.012)
 
-        if gameplay_active:
+        if gameplay_active and game_mode == GAME_MODE_AI:
             sim_timer -= dt
             if sim_timer <= 0:
                 if sim_next == "a":
@@ -1759,7 +1895,7 @@ def main() -> None:
                         last_line = "Equal MP - separated"
                     if winner is None:
                         sim_next = "b"
-                        sim_timer = SUBSTEP_PAUSE_MS
+                        sim_timer = ai_turn_wait_after("a")
                 else:
                     pb = monte_carlo_plan_move(
                         m_b.pos,
@@ -1805,7 +1941,7 @@ def main() -> None:
                         last_line = "Equal MP - separated"
                     if winner is None:
                         sim_next = "a"
-                        sim_timer = SUBSTEP_PAUSE_MS + PAUSE_BETWEEN_ROUNDS_MS
+                        sim_timer = ai_turn_wait_after("b")
 
         if winner is not None and ui_state == SCREEN_RUNNING:
             emit_ui_particles(ui_particles, WIN_W * 0.5, WIN_H * 0.32, (244, 196, 108), count=38)
@@ -1814,6 +1950,10 @@ def main() -> None:
         if winner is None:
             next_house = "Phoenix A" if sim_next == "a" else "Serpent B"
             wait_note = f" | wait ~{max(0, int(sim_timer))} ms -> {next_house}"
+            if game_mode == GAME_MODE_AI:
+                wait_note += f" | AI {int(ai_turn_delay_ms)}ms"
+            if game_mode == GAME_MODE_LOCAL:
+                wait_note = f" | {next_house}: WASD/arrows"
             if ui_state != SCREEN_RUNNING or transition_dir != 0:
                 wait_note = " | PAUSED (Space)"
             substep = (
@@ -1890,6 +2030,8 @@ def main() -> None:
             winner=winner,
             last_line=last_line or "The labyrinth is listening.",
             sim_timer=sim_timer,
+            game_mode=game_mode,
+            ai_turn_delay_ms=ai_turn_delay_ms,
         )
         hud_tex = int(tid)
         glViewport(0, 0, WIN_W, WIN_H)
@@ -1906,6 +2048,7 @@ def main() -> None:
             body_font=menu_body_font,
             ui_particles=ui_particles,
             floating_texts=floating_texts,
+            game_mode=game_mode,
         )
         ui_tex, _, _ = surface_to_texture(overlay_surf)
         draw_fullscreen_overlay(ui_tex)
