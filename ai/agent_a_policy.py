@@ -1,6 +1,6 @@
 """
-Agent A: A* steps + minimax-style orb scoring.
-MP rules: lower MP flees (greedy max distance); higher MP chases enemy; equal MP seeks orbs.
+Agent A: A* steps + classical minimax for equal-MP tactical play.
+MP rules: lower MP flees, higher MP chases enemy, equal MP searches future moves with minimax.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from typing import List, Tuple
 
-from ai.minimax import minimax_style_pick_best_orb, next_step_toward_goal
+from ai.minimax import minimax_decide_move, next_step_toward_goal
 from core.artifact import PowerOrb
 
 Pos = Tuple[int, int]
@@ -67,12 +67,17 @@ def plan_move_agent_a(
         alt = [p for p in legal if p != prev_pos]
         return rng.choice(alt if alt else legal)
 
-    best_o = minimax_style_pick_best_orb(my_pos, orbs, grid_w=grid_w, grid_h=grid_h, blocked=blocked)
-    if best_o is not None:
-        nxt = next_step_toward_goal(my_pos, best_o.pos, grid_w=grid_w, grid_h=grid_h, blocked=blocked)
-        if nxt != prev_pos or nxt == my_pos:
-            return nxt
-        alt = [p for p in legal if p != prev_pos]
-        return rng.choice(alt if alt else legal)
-
-    return pick_no_uturn(legal)
+    nxt = minimax_decide_move(
+        my_pos,
+        enemy_pos,
+        my_mp,
+        enemy_mp,
+        orbs,
+        grid_w=grid_w,
+        grid_h=grid_h,
+        blocked=blocked,
+    )
+    if nxt != prev_pos or nxt == my_pos:
+        return nxt
+    alt = [p for p in legal if p != prev_pos]
+    return rng.choice(alt if alt else legal)
