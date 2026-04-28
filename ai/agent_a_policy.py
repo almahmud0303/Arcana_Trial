@@ -1,6 +1,6 @@
 """
 Agent A: A* steps + minimax-style orb scoring.
-MP rules: lower MP flees (greedy max distance); higher MP chases enemy; equal MP seeks orbs.
+MP rules: lower MP flees while looking for power, higher MP chases enemy, equal MP seeks orbs.
 """
 
 from __future__ import annotations
@@ -8,10 +8,31 @@ from __future__ import annotations
 import random
 from typing import List, Tuple
 
-from ai.minimax import minimax_style_pick_best_orb, next_step_toward_goal
+from ai.minimax import minimax_style_pick_best_orb, next_step_toward_goal, shortest_path_len
 from core.artifact import PowerOrb
 
 Pos = Tuple[int, int]
+
+
+def _best_orb_score(
+    pos: Pos,
+    orbs: List[PowerOrb],
+    *,
+    grid_w: int,
+    grid_h: int,
+    blocked: List[List[bool]],
+    step_penalty: float = 0.35,
+) -> float:
+    if not orbs:
+        return 0.0
+
+    best = -1e18
+    for orb in orbs:
+        dist = shortest_path_len(pos, orb.pos, grid_w=grid_w, grid_h=grid_h, blocked=blocked)
+        if dist is None:
+            continue
+        best = max(best, orb.value - step_penalty * dist)
+    return 0.0 if best == -1e18 else best
 
 
 def plan_move_agent_a(
@@ -48,16 +69,24 @@ def plan_move_agent_a(
         return rng.choice(alt if alt else cands)
 
     if my_mp < enemy_mp:
+        def escape_power_score(p: Pos) -> float:
+            enemy_distance = dist_enemy(p)
+            orb_score = _best_orb_score(p, orbs, grid_w=grid_w, grid_h=grid_h, blocked=blocked)
+            closer_penalty = 4.0 if enemy_distance < cur_d else 0.0
+            return enemy_distance * 2.0 + orb_score - closer_penalty
+
         farther = [p for p in legal if dist_enemy(p) > cur_d]
         if farther:
-            best = max(dist_enemy(p) for p in farther)
-            group = [p for p in farther if dist_enemy(p) == best]
+            best = max(escape_power_score(p) for p in farther)
+            group = [p for p in farther if escape_power_score(p) == best]
             return pick_no_uturn(group)
         same = [p for p in legal if dist_enemy(p) == cur_d]
         if same:
-            return pick_no_uturn(same)
-        best = max(dist_enemy(p) for p in legal)
-        group = [p for p in legal if dist_enemy(p) == best]
+            best = max(escape_power_score(p) for p in same)
+            group = [p for p in same if escape_power_score(p) == best]
+            return pick_no_uturn(group)
+        best = max(escape_power_score(p) for p in legal)
+        group = [p for p in legal if escape_power_score(p) == best]
         return pick_no_uturn(group)
 
     if my_mp > enemy_mp:

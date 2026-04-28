@@ -3,7 +3,7 @@ Monte Carlo rollouts for agent B: sample many futures after each candidate first
 average a heuristic score, pick the best first move.
 
 Enemy in rollouts uses a simple random walk (stochastic environment).
-Reward matches the active mode: flee (distance), hunt (chase weaker), equal (orb proximity).
+Reward matches the active mode: flee (distance + power access), hunt (chase weaker), equal (orb proximity).
 """
 
 from __future__ import annotations
@@ -36,6 +36,12 @@ def _mode_from_mp(my_mp: int, enemy_mp: int) -> Mode:
     return "equal"
 
 
+def _best_orb_score(pos: Pos, orbs: list, step_penalty: float = 0.35) -> float:
+    if not orbs:
+        return 0.0
+    return max(float(o.value) - step_penalty * manhattan(pos, o.pos) for o in orbs)
+
+
 def _rollout_score(
     my_start: Pos,
     enemy_start: Pos,
@@ -58,7 +64,9 @@ def _rollout_score(
         myp = rng.choice(my_legal)
 
     if mode == "flee":
-        return float(manhattan(myp, enp))
+        distance = manhattan(myp, enp)
+        capture_penalty = 50.0 if myp == enp and my_mp < enemy_mp else 0.0
+        return distance * 2.0 + _best_orb_score(myp, orbs) - capture_penalty
     if mode == "hunt":
         d = manhattan(myp, enp)
         if myp == enp and my_mp > enemy_mp:
